@@ -162,10 +162,18 @@ class FlightOfferConverter:
 
     @staticmethod
     def _is_vtrip(segments: Iterable[FlightSegment]) -> bool:
-        segments = list(segments)
-        if len(segments) <= 1:
+        """
+        Check if trip is virtual (vtrip).
+
+        Conditions: len(FlightSegment) > 1 AND marketing_carrier != operating_carrier
+        in any segment.
+        """
+        segments_list = list(segments)
+        if len(segments_list) <= 1:
             return False
-        return any(seg.marketing_carrier != seg.operating_carrier for seg in segments)
+        return any(
+            seg.marketing_carrier != seg.operating_carrier for seg in segments_list
+        )
 
     @staticmethod
     def _resolve_trip_class(proposal: dict[str, Any]) -> str:

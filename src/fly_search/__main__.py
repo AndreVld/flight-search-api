@@ -2,14 +2,17 @@
 
 import uvicorn
 
+from fly_search.config import get_settings
+
 
 def main() -> None:
     """Run dev server."""
+    settings = get_settings()
     uvicorn.run(
         "fly_search.app:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
+        host=settings.host,
+        port=settings.port,
+        reload=settings.reload,
         factory=False,
     )
 

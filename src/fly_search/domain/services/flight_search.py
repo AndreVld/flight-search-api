@@ -41,7 +41,7 @@ class FlightSearchService:
 
         aggregated: dict[str, list[FlightOffer]] = {}
         async for chunk in self._avia_api.get_chunk(task_id):
-            offers = self._convert_chunk(chunk)
+            offers = self._convert_chunk(chunk, process_id)
             aggregated = self._merge_offers(aggregated, offers)
             logger.debug(
                 "chunk processed",
@@ -51,11 +51,23 @@ class FlightSearchService:
         success = any(aggregated.values())
         return ServiceResponse(success=success, pid=process_id, result=aggregated)
 
-    def _convert_chunk(self, chunk: ProviderChunk) -> dict[str, list[FlightOffer]]:
+    def _convert_chunk(
+        self, chunk: ProviderChunk, pid: str
+    ) -> dict[str, list[FlightOffer]]:
         try:
             return self._converter.convert_chunk(chunk)
-        except Exception:
-            logger.exception("failed to convert chunk")
+        except (KeyError, ValueError, TypeError) as e:
+            logger.error(
+                "failed to convert chunk",
+                extra={"pid": pid, "error_type": type(e).__name__, "error": str(e)},
+                exc_info=True,
+            )
+            return {}
+        except Exception as e:
+            logger.exception(
+                "unexpected error converting chunk",
+                extra={"pid": pid, "error_type": type(e).__name__},
+            )
             return {}
 
     @staticmethod
@@ -63,11 +75,13 @@ class FlightSearchService:
         target: dict[str, list[FlightOffer]],
         new: dict[str, list[FlightOffer]],
     ) -> dict[str, list[FlightOffer]]:
+        """Merge new offers into target, returning new dict (immutable)."""
+        result = {key: offers.copy() for key, offers in target.items()}
         for key, offers in new.items():
-            if key not in target:
-                target[key] = []
-            target[key].extend(offers)
-        return target
+            if key not in result:
+                result[key] = []
+            result[key].extend(offers)
+        return result
 
     @staticmethod
     def _generate_pid() -> str:

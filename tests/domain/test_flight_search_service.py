@@ -93,4 +93,4 @@ async def test_converter_exception_is_logged(chunk_builder, caplog) -> None:
 
     assert response.success is False
     assert response.result == {}
-    assert "failed to convert chunk" in caplog.text
+    assert "unexpected error converting chunk" in caplog.text
