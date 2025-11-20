@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
+import tempfile
+import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any, TypeVar
 
 from cachetools import TTLCache
@@ -40,16 +45,29 @@ class CacheService:
         settings = get_settings()
 
         # Response cache (for get_flights results) - 3 minutes default
+        # In-memory cache, works within single process
         self._response_cache = TTLCache(
             maxsize=response_cache_size or settings.cache_response_size,
             ttl=response_cache_ttl or settings.cache_response_ttl,
         )
 
         # Task cache (for background tasks) - 1 hour default
+        # In-memory cache for single process
         self._task_cache = TTLCache(
             maxsize=task_cache_size or settings.cache_task_size,
             ttl=task_cache_ttl or settings.cache_task_ttl,
         )
+
+        # File-based cache for tasks to share between Gunicorn workers
+        # Используем файловый кеш для задач, чтобы они были доступны между процессами
+        self._task_cache_dir = Path(
+            os.environ.get("FLY_SEARCH_TASK_CACHE_DIR", tempfile.gettempdir())
+        ) / "fly_search_tasks"
+        self._task_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._task_cache_ttl = task_cache_ttl or settings.cache_task_ttl
+
+        # Очищаем старые файлы при инициализации
+        self._cleanup_old_task_files()
 
     def get_response(self, key: str) -> Any | None:
         """
@@ -73,9 +91,23 @@ class CacheService:
         """
         self._response_cache[key] = value
 
+    def _cleanup_old_task_files(self) -> None:
+        """Remove expired task cache files."""
+        current_time = time.time()
+        for task_file in self._task_cache_dir.glob("*.json"):
+            try:
+                with open(task_file, encoding="utf-8") as f:
+                    data = json.load(f)
+                    if current_time - data.get("timestamp", 0) > self._task_cache_ttl:
+                        task_file.unlink(missing_ok=True)
+            except (json.JSONDecodeError, OSError, KeyError):
+                task_file.unlink(missing_ok=True)
+
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         """
         Get cached task result by task_id.
+
+        Проверяет сначала in-memory кеш, затем файловый кеш для работы между процессами.
 
         Args:
             task_id: Task identifier
@@ -83,17 +115,98 @@ class CacheService:
         Returns:
             Task data dict or None if not found/expired
         """
-        return self._task_cache.get(task_id)
+        # Сначала проверяем in-memory кеш
+        cached = self._task_cache.get(task_id)
+        if cached is not None:
+            return cached
+
+        # Проверяем файловый кеш (для работы между Gunicorn workers)
+        task_file = self._task_cache_dir / f"{task_id}.json"
+        if not task_file.exists():
+            return None
+
+        try:
+            with open(task_file, encoding="utf-8") as f:
+                data = json.load(f)
+                # Проверяем TTL
+                if time.time() - data.get("timestamp", 0) > self._task_cache_ttl:
+                    task_file.unlink(missing_ok=True)
+                    return None
+                # Восстанавливаем task_data из JSON
+                task_data = data.get("data")
+                if not task_data:
+                    return None
+
+                # Восстанавливаем ServiceResponse из dict если нужно
+                # Проверяем, что result - это dict с полями ServiceResponse
+                if (
+                    "result" in task_data
+                    and isinstance(task_data["result"], dict)
+                    and "success" in task_data["result"]
+                    and "pid" in task_data["result"]
+                    and "result" in task_data["result"]
+                ):
+                    from av_parser.models import ServiceResponse
+
+                    try:
+                        # Восстанавливаем ServiceResponse из dict
+                        task_data["result"] = ServiceResponse.model_validate(
+                            task_data["result"]
+                        )
+                    except Exception:
+                        # Если не получилось, оставляем как dict
+                        pass
+
+                # Сохраняем в in-memory кеш для быстрого доступа
+                self._task_cache[task_id] = task_data
+                return task_data
+        except (json.JSONDecodeError, OSError, KeyError):
+            task_file.unlink(missing_ok=True)
+            return None
 
     def set_task(self, task_id: str, task_data: dict[str, Any]) -> None:
         """
         Store task result in cache.
 
+        Сохраняет в in-memory и файловый кеш для работы между процессами.
+
         Args:
             task_id: Task identifier
-            task_data: Task data to cache
+            task_data: Task data to cache (может содержать ServiceResponse)
         """
+        # Сохраняем в in-memory кеш
         self._task_cache[task_id] = task_data
+
+        # Сериализуем task_data для файлового кеша
+        # Если в task_data есть ServiceResponse, конвертируем в dict
+        serializable_data = task_data.copy()
+        if "result" in serializable_data:
+            result = serializable_data["result"]
+            if hasattr(result, "model_dump"):
+                # Если result - это Pydantic модель (ServiceResponse), сериализуем её
+                serializable_data["result"] = result.model_dump()
+            elif isinstance(result, dict):
+                # Если result уже dict, оставляем как есть
+                pass
+
+        # Сохраняем в файловый кеш для работы между Gunicorn workers
+        task_file = self._task_cache_dir / f"{task_id}.json"
+        try:
+            with open(task_file, "w", encoding="utf-8") as f:
+                json.dump(
+                    {"timestamp": time.time(), "data": serializable_data},
+                    f,
+                    ensure_ascii=False,
+                )
+        except OSError as e:
+            # Логируем ошибки записи файла, но не прерываем выполнение
+            import logging
+
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                "Failed to write task cache file",
+                extra={"task_id": task_id, "error": str(e), "path": str(task_file)},
+            )
 
     @staticmethod
     def build_cache_key(prefix: str, *args: Any, **kwargs: Any) -> str:

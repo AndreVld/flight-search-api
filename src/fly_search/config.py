@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8000, description="Server port", gt=0, le=65535)
     reload: bool = Field(default=True, description="Enable auto-reload in development")
+    workers: int = Field(
+        default=4,
+        description="Number of Gunicorn worker processes",
+        gt=0,
+        le=32,
+    )
 
     # AviaApiAdapter settings
     max_concurrent_threads: int = Field(

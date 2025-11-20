@@ -1,0 +1,30 @@
+services:
+  fly-search-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fly-search-api
+    ports:
+      - "8000:8000"
+    environment:
+      - FLY_SEARCH_HOST=0.0.0.0
+      - FLY_SEARCH_PORT=8000
+      - FLY_SEARCH_RELOAD=false
+      - FLY_SEARCH_LOG_LEVEL=INFO
+      - FLY_SEARCH_WORKERS=4
+      - FLY_SEARCH_CACHE_RESPONSE_TTL=180
+      - FLY_SEARCH_CACHE_RESPONSE_SIZE=100
+      - FLY_SEARCH_CACHE_TASK_TTL=3600
+      - FLY_SEARCH_CACHE_TASK_SIZE=1000
+      - FLY_SEARCH_MAX_CONCURRENT_THREADS=10
+    volumes:
+      # Монтируем chunk.json для возможности обновления без пересборки
+      - ./chunk.json:/app/chunk.json:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -f http://localhost:$$FLY_SEARCH_PORT/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
