@@ -29,10 +29,7 @@ curl "http://localhost:8000/get_flights?pid=test-123"
 ## Тестирование
 
 ```bash
-# Запуск всех тестов
-poetry run pytest
 
-# С подробным выводом
 poetry run pytest -v
 
 ```

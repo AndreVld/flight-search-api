@@ -51,6 +51,32 @@ class Settings(BaseSettings):
         pattern="^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$",
     )
 
+    # Cache settings
+    cache_response_ttl: int = Field(
+        default=180,
+        description="Response cache TTL in seconds (3 minutes)",
+        gt=0,
+        le=3600,
+    )
+    cache_response_size: int = Field(
+        default=100,
+        description="Maximum number of cached responses",
+        gt=0,
+        le=10000,
+    )
+    cache_task_ttl: int = Field(
+        default=3600,
+        description="Task cache TTL in seconds (1 hour)",
+        gt=0,
+        le=86400,
+    )
+    cache_task_size: int = Field(
+        default=1000,
+        description="Maximum number of cached tasks",
+        gt=0,
+        le=100000,
+    )
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
